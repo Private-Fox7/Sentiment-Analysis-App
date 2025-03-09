@@ -15,6 +15,7 @@ import requests
 import base64
 from datetime import datetime
 from dotenv import load_dotenv # type: ignore
+nltk.download('punkt')
 
 # Set a custom path for NLTK data that's writable in most environments
 nltk_data_path = os.path.join(os.path.expanduser("~"), "nltk_data")
