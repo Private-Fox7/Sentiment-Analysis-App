@@ -19,6 +19,7 @@ import sys
 import time
 import sys
 import codecs
+nltk.download('punkt')
 
 # Force UTF-8 encoding for Windows terminals (fixes emoji printing errors)
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
