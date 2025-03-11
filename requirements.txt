@@ -7,6 +7,8 @@ scikit-learn==1.3.0
 python-dotenv==1.0.0
 requests==2.31.0
 gdown==4.7.1
-numpy>=1.26.0
+numpy==1.26.0 
 tqdm==4.66.1
 loguru==0.7.0
+setuptools  
+pillow==9.4.0 
