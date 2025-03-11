@@ -5,6 +5,22 @@ import emoji
 import re
 import os
 import nltk
+
+
+# Define a writable directory for NLTK data (inside the app directory)
+NLTK_DATA_DIR = os.path.join(os.getcwd(), "nltk_data")
+
+# Ensure the directory exists
+if not os.path.exists(NLTK_DATA_DIR):
+    os.makedirs(NLTK_DATA_DIR, exist_ok=True)
+
+# Set the NLTK data path
+nltk.data.path.append(NLTK_DATA_DIR)
+
+# Now download necessary resources
+nltk.download('punkt', download_dir=NLTK_DATA_DIR)
+nltk.download('stopwords', download_dir=NLTK_DATA_DIR)
+nltk.download('wordnet', download_dir=NLTK_DATA_DIR)
 # Download NLTK resources
 nltk.download('punkt')
 nltk.download('stopwords')
