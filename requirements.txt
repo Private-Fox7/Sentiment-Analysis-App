@@ -1,9 +1,0 @@
-﻿streamlit==1.43.0
-joblib==1.4.2
-emoji==2.14.1
-pandas==2.2.3
-nltk==3.9.1
-scikit-learn==1.6.1
-python-dotenv==1.0.1
-requests==2.32.3
-emoji==2.8.0
