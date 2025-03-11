@@ -42,8 +42,10 @@ import nltk
 load_dotenv()
 
 # Hardcoded GitHub settings
-GITHUB_TOKEN = st.secrets.get("github", {}).get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN"))
-GITHUB_REPO = st.secrets.get("github", {}).get("GITHUB_REPO", os.getenv("GITHUB_REPO")) # Replace with your GitHub repo
+import os
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+import os
+GITHUB_REPO = os.getenv("GITHUB_REPO", "Private-Fox7/Sentiment-Analysis-App")
 GITHUB_PATH = "feedback_dataset.csv"  # Path to the CSV file in the repo
 
 nltk.download('punkt')
