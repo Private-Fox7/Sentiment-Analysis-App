@@ -243,38 +243,46 @@ model, vectorizer = load_models()
 # Function to run training asynchronously
 def retrain_model_async():
     try:
-        # Update state to indicate training is in progress
+        # Indicate that training is in progress
         st.session_state.training_in_progress = True
-        st.session_state.training_message = "🔄 Retraining model in background..."
-        
-        # Run training script with a reduced dataset size
-        process = subprocess.run(
-            ["python", "test1.py", "--quick_train"], 
-            capture_output=True, 
-            text=True
-        )
-        
-        if process.returncode == 0:
-            st.session_state.training_message = "✅ Model retrained successfully!"
-            st.session_state.training_complete = True
-            st.session_state.training_error = None
-            st.session_state.last_model_update = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Force cache to clear for model reloading
-            st.cache_resource.clear()
-            
-            # Force app refresh to load new model
-            st.rerun()
-        else:
-            st.session_state.training_message = "⚠️ Retraining failed!"
-            st.session_state.training_error = process.stderr
-            st.session_state.training_complete = True
+        st.session_state.training_message = "🔄 Retraining model in the background..."
+        st.session_state.training_complete = False
+
+        # Run training script as a separate process (non-blocking)
+        process = subprocess.Popen(["python", "test1.py", "--quick_train"],
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   text=True)
+
+        # Do not wait for process completion, allow UI to stay responsive
+        time.sleep(3)  # Give time for the process to start properly
+
     except Exception as e:
-        st.session_state.training_message = "⚠️ Error during retraining"
+        st.session_state.training_message = "⚠️ Error starting retraining"
         st.session_state.training_error = str(e)
         st.session_state.training_complete = True
-    finally:
         st.session_state.training_in_progress = False
+        return
+
+    # Monitor the process in the background
+    while process.poll() is None:
+        time.sleep(5)  # Check every 5 seconds
+        st.session_state.training_message = "⏳ Model is still training..."
+
+    # Process completed, check exit status
+    if process.returncode == 0:
+        st.session_state.training_message = "✅ Model retrained successfully!"
+        st.session_state.training_complete = True
+        st.session_state.training_error = None
+        st.session_state.last_model_update = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Clear cache and refresh app to load new model
+        st.cache_resource.clear()
+        st.rerun()
+    else:
+        st.session_state.training_message = "⚠️ Retraining failed!"
+        st.session_state.training_error = process.stderr.read()
+        st.session_state.training_complete = True
 
 # Load trained model and vectorizer
 try:
