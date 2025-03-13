@@ -175,12 +175,50 @@ if "last_model_update" not in st.session_state:
 if "github_settings_initialized" not in st.session_state:
     st.session_state.github_settings_initialized = True  # Always initialized
 
-def get_model_accuracy():
-    try:
-        with open("accuracy.txt", "r") as f:
-            return f.read().strip() + "%"
-    except FileNotFoundError:
-        return "N/A"
+import requests
+import requests
+
+# GitHub Raw URL for Accuracy File
+GITHUB_ACCURACY_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/accuracy.txt"
+
+def fetch_model_accuracy():
+    """Fetch model accuracy from GitHub and format it correctly."""
+    response = requests.get(GITHUB_ACCURACY_URL)
+
+    if response.status_code == 200:
+        try:
+            accuracy = float(response.text.strip())  # Convert to float
+            return f"{accuracy * 100:.2f}%"  # Convert from fraction (0.9960) to percentage (99.60%)
+        except ValueError:
+            return "N/A (Invalid Accuracy Format)"
+    else:
+        return "N/A (Failed to load)"
+
+# Fetch and display accuracy in Streamlit
+model_accuracy = fetch_model_accuracy()
+
+
+import requests
+import joblib
+import io
+
+MODEL_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/model.pkl"
+VECTORIZER_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/vectorizer.pkl"
+
+def load_model_from_github(url):
+    """Loads a model from GitHub into memory without saving locally"""
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, stream=True, headers=headers)
+    print(f"🔗 Fetching model from: {url}")
+    print(f"📜 Status Code: {response.status_code}")
+    
+    if response.status_code == 200:
+        model_file = io.BytesIO(response.content)  # Store in memory (not local disk)
+        return joblib.load(model_file)
+    else:
+        print(f"❌ Failed to download model. Status: {response.status_code}")
+        return None
+
 @st.cache_resource
 def load_models():
     """Loads model and vectorizer from GitHub directly into memory"""
@@ -328,11 +366,13 @@ The model understands emojis like:
 - 😊 👍 ❤️ (positive)
 - 😡 👎 😢 (negative)
 """)
+# Display model accuracy in Streamlit sidebar
+st.sidebar.info(f"📊 **Model Accuracy:** {model_accuracy}")
 st.sidebar.info("""
 This app is linked to this GitHub Repository 
    👉 Private-Fox7/Sentiment-Analysis-App
 """)
-st.sidebar.info(f"📊 **Model Accuracy:** {get_model_accuracy()}")
+
 
 # Show model update timestamp
 if "last_model_update" in st.session_state:
@@ -361,28 +401,6 @@ user_review = st.text_area("💬 Enter your movie review here:", "", height=150)
 
 # Debug mode toggle
 debug_mode = st.sidebar.checkbox("Show preprocessing details")
-
-import requests
-import joblib
-import io
-
-MODEL_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/model.pkl"
-VECTORIZER_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/vectorizer.pkl"
-
-def load_model_from_github(url):
-    """Loads a model from GitHub into memory without saving locally"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(url, stream=True, headers=headers)
-    print(f"🔗 Fetching model from: {url}")
-    print(f"📜 Status Code: {response.status_code}")
-    
-    if response.status_code == 200:
-        model_file = io.BytesIO(response.content)  # Store in memory (not local disk)
-        return joblib.load(model_file)
-    else:
-        print(f"❌ Failed to download model. Status: {response.status_code}")
-        return None
-
 
 if not model or not vectorizer:
     st.error("❌ Model or vectorizer is missing. Please check the logs.")
@@ -426,14 +444,15 @@ if st.sidebar.button("🔄 Reload Model"):
 
 
     # Check retraining result
-        if process.returncode == 0:
-            progress_bar.progress(100)  # Show complete progress
-            status_text.success("🎉 Model updated and loaded into the app!")
-            model, vectorizer = load_models()  # Load the new model
-            st.session_state.last_model_update = time.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            st.sidebar.error("⚠️ Model retraining failed! Check logs.")
-            st.text(process.stderr.read())  # Show error message
+    if process.returncode == 0:
+         progress_bar.progress(100)  # Show complete progress
+         status_text.success("🎉 Model updated and loaded into the app!")
+         model, vectorizer = load_models()  # Load the new model
+         st.session_state.last_model_update = time.strftime("%Y-%m-%d %H:%M:%S")
+         st.rerun() 
+    else:
+        st.sidebar.error("⚠️ Model retraining failed! Check logs.")
+        st.text(process.stderr.read())  # Show error message
 
     # Clear progress and notifications
     progress_bar.empty()
@@ -470,7 +489,7 @@ if st.button("🔍 Analyze Sentiment"):
             
             # Get prediction probability
             confidence = model.predict_proba(vectorized_text).max()
-            time.sleep(0.5)  # Slight delay for user experience
+            time.sleep(1.03)  # Slight delay for user experience
 
         # Display result with effects
         if prediction == "positive":
