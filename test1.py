@@ -32,6 +32,8 @@ load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Load from .env or Render environment
 GITHUB_REPO = "Private-Fox7/Sentiment-Analysis-App"  # Replace with your GitHub repo
 GITHUB_PATH = "feedback_dataset.csv"  # Path to the CSV file in the repo
+GITHUB_ACCURACY_FILE = "accuracy.txt"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_ACCURACY_FILE}"
 
 # Force UTF-8 encoding for Windows terminals (fixes emoji printing errors)
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
@@ -678,21 +680,42 @@ def predict_sentiment(text):
             "error": str(e)
         }
     
-import os
+def save_accuracy_to_github(accuracy):
+    """Saves accuracy.txt and uploads it to GitHub."""
+    
+    # Save accuracy locally (temporary on Render)
+    with open(GITHUB_ACCURACY_FILE, "w") as f:
+        f.write(f"{accuracy:.4f}")
 
-accuracy_path = "accuracy.txt"
+    # Read file content
+    with open(GITHUB_ACCURACY_FILE, "r") as f:
+        content = f.read()
+    encoded_content = base64.b64encode(content.encode()).decode()  # Encode to Base64 for GitHub API
 
-# Check if accuracy.txt exists, if not, regenerate it
-if not os.path.exists(accuracy_path):
-    accuracy = 95.67  # Example accuracy (replace with actual calculation)
-    with open(accuracy_path, "w") as f:
-        f.write(str(round(accuracy, 2)))
+    # Get file SHA if exists
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    response = requests.get(GITHUB_API_URL, headers=headers)
+    
+    sha = response.json().get("sha") if response.status_code == 200 else None  # Get the file's SHA for updating
 
-# Read the accuracy to display in the Streamlit app
-with open(accuracy_path, "r") as f:
-    model_accuracy = f.read()
+    # Prepare payload
+    data = {
+        "message": "Updated model accuracy",
+        "content": encoded_content,
+        "branch": "main",
+    }
+    if sha:
+        data["sha"] = sha  # Needed to update existing file
 
-print(f"📊 Model Accuracy: {model_accuracy}%")
+    # Upload to GitHub
+    response = requests.put(GITHUB_API_URL, headers=headers, json=data)
+    if response.status_code in [200, 201]:
+        print("✅ accuracy.txt successfully updated on GitHub!")
+    else:
+        print(f"❌ Failed to update accuracy.txt on GitHub: {response.text}")
+
+# Call this function after training completes
+save_accuracy_to_github(accuracy)
 
 
 
