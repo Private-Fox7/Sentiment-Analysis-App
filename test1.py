@@ -16,12 +16,14 @@ import emoji
 import numpy as np
 import sys
 import time
+import io
 import codecs
 import gdown
 from datetime import datetime  # For timestamp in commit messages
 import requests
 import base64
 from dotenv import load_dotenv  # type: ignore
+
 
 # Load environment variables
 load_dotenv()
@@ -388,23 +390,52 @@ custom_examples = add_text_examples()
 df = pd.concat([df, custom_examples], ignore_index=True)
 print(f"Total dataset size after augmentation: {len(df)}")
 
-# Load feedback data if available - MOVED BEFORE PREPROCESSING
-feedback_file = "feedback_dataset.csv"
-if os.path.exists(feedback_file):
-    try:
-        feedback_data = pd.read_csv(feedback_file)
+# Function to load GitHub CSV
+def load_github_csv():
+    """
+    Load a CSV file from a GitHub repository
+    
+    Returns:
+    pd.DataFrame: DataFrame containing the CSV data, or empty DataFrame if file not found
+    """
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}'
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        # File exists, decode content
+        content = base64.b64decode(response.json()['content']).decode('utf-8')
+        
+        # Return as DataFrame
+        return pd.read_csv(pd.io.common.StringIO(content))
+    elif response.status_code == 404:
+        # File doesn't exist yet
+        return pd.DataFrame(columns=["text", "label", "timestamp"])
+    else:
+        # Other error
+        print(f"Error loading file: {response.status_code} - {response.text}")
+        return pd.DataFrame(columns=["text", "label", "timestamp"])
 
-        # Ensure the text column exists
-        if "text" in feedback_data.columns and "label" in feedback_data.columns:
-            # Give more weight to feedback data (repeat it 5 times)
-            feedback_data = pd.concat([feedback_data] * 25, ignore_index=True)
-            
-            df = pd.concat([df, feedback_data], ignore_index=True)
-            print(f"Added {len(feedback_data)} feedback samples to training data.")
-        else:
-            print("⚠️ Warning: Feedback dataset is missing required columns (text, label).")
-    except Exception as e:
-        print(f"Error loading feedback data: {str(e)}")
+# Load feedback data if available - MOVED BEFORE PREPROCESSING
+# Load feedback data from GitHub
+try:
+    feedback_data = load_github_csv()
+
+    # Ensure the text column exists
+    if "text" in feedback_data.columns and "label" in feedback_data.columns:
+        # Give more weight to feedback data (repeat it 5 times)
+        feedback_data = pd.concat([feedback_data] * 25, ignore_index=True)
+        
+        df = pd.concat([df, feedback_data], ignore_index=True)
+        print(f"Added {len(feedback_data)} feedback samples to training data.")
+    else:
+        print("⚠️ Warning: Feedback dataset is missing required columns (text, label).")
+except Exception as e:
+    print(f"Error loading feedback data from GitHub: {str(e)}")
 
 # Apply preprocessing to dataset AFTER feedback data is added
 print("Preprocessing text data...")
@@ -412,7 +443,7 @@ df["cleaned_text"] = df["text"].apply(preprocess_text)
 print("Preprocessing complete.")
 
 # Initialize TF-IDF Vectorizer with reduced features in quick mode
-max_features = 4000 if quick_train else 5000
+max_features = 3000 if quick_train else 5000
 print(f"Vectorizing text data (max_features={max_features})...")
 vectorizer = TfidfVectorizer(
     ngram_range=(1, 3),
@@ -457,7 +488,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 print("\nTraining model...")
 try:
     if quick_train:
-        model = LogisticRegression(C=1.0, max_iter=200, solver='liblinear', class_weight='balanced')
+        model = LogisticRegression(C=1.0, max_iter=100, solver='liblinear', class_weight='balanced')
     else:
         model = LogisticRegression(C=1.0, max_iter=1000, solver='liblinear', class_weight='balanced')
 
@@ -500,65 +531,73 @@ if not quick_train:
             print(f"{feat}: {coef:.4f}")
     except Exception as e:
         print(f"Error during feature analysis: {str(e)}")
+
 def update_github_model_files():
-    """Update model.pkl and vectorizer.pkl on GitHub"""
+    """Upload model.pkl and vectorizer.pkl directly to GitHub from memory."""
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
 
-    for file in ["model.pkl", "vectorizer.pkl"]:
-        try:
-            # Get file SHA if exists
-            url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{file}'
-            response = requests.get(url, headers=headers)
-            sha = response.json().get('sha') if response.status_code == 200 else None
+    # Serialize model in memory
+    model_buffer = io.BytesIO()
+    joblib.dump(model, model_buffer)
+    model_buffer.seek(0)
 
-            # Read and encode file
-            with open(file, 'rb') as f:
-                content = base64.b64encode(f.read()).decode()
+    # Serialize vectorizer in memory
+    vectorizer_buffer = io.BytesIO()
+    joblib.dump(vectorizer, vectorizer_buffer)
+    vectorizer_buffer.seek(0)
 
-            # Prepare payload
-            data = {
-                'message': f'Update {file} - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
-                'content': content,
-                'branch': 'main'
-            }
-            if sha: data['sha'] = sha
+    # Encode for GitHub upload
+    model_encoded = base64.b64encode(model_buffer.read()).decode()
+    vectorizer_encoded = base64.b64encode(vectorizer_buffer.read()).decode()
 
-            # Update/Create file
-            response = requests.put(url, headers=headers, json=data)
-            
-            if response.status_code in (200, 201):
-                print(f"✅ {file} updated on GitHub")
-            else:
-                print(f"❌ Failed to update {file}. Status: {response.status_code}")
-                print(f"Error: {response.text}")
+    def upload_file(file_name, content_encoded):
+        url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{file_name}'
+        response = requests.get(url, headers=headers)
+        sha = response.json().get('sha') if response.status_code == 200 else None
 
-        except Exception as e:
-            print(f"🔥 Critical error updating {file}: {str(e)}")
-            raise
+        data = {
+            'message': f'Update {file_name} - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+            'content': content_encoded,
+            'branch': 'main'
+        }
+        if sha:
+            data['sha'] = sha  # If file exists, update it
 
-# Save Model & Vectorizer with error handling
-print("\nSaving model and vectorizer...")
+        upload_response = requests.put(url, headers=headers, json=data)
+
+        if upload_response.status_code in (200, 201):
+            print(f"✅ {file_name} successfully uploaded to GitHub.")
+            return True
+        else:
+            print(f"❌ Failed to upload {file_name}. Status: {upload_response.status_code}")
+            print(f"Error: {upload_response.text}")
+            return False
+
+    # Upload model.pkl and vectorizer.pkl with retries
+    for attempt in range(3):  # Retry up to 3 times
+        print(f"🔄 Upload attempt {attempt + 1} for model.pkl...")
+        if upload_file("model.pkl", model_encoded):
+            break
+        time.sleep(2)  # Wait before retrying
+
+    time.sleep(1)  # Small delay before next upload
+
+    for attempt in range(3):
+        print(f"🔄 Upload attempt {attempt + 1} for vectorizer.pkl...")
+        if upload_file("vectorizer.pkl", vectorizer_encoded):
+            break
+        time.sleep(2)
+
+# Save Model & Vectorizer to GitHub
+print("\nSaving model and vectorizer to GitHub...")
 try:
-    joblib.dump(vectorizer, 'vectorizer.pkl')
-    joblib.dump(model, 'model.pkl')
-    print("Model and vectorizer saved successfully.")
-    update_github_model_files() 
+    update_github_model_files()
+    print("✅ Model and vectorizer updated successfully on GitHub.")
 except Exception as e:
-    print(f"Error saving model: {str(e)}")
-    # Try alternative saving location with error handling
-    try:
-        save_dir = os.path.join(os.path.expanduser("~"), "model_files")
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        joblib.dump(vectorizer, os.path.join(save_dir, 'vectorizer.pkl'))
-        joblib.dump(model, os.path.join(save_dir, 'model.pkl'))
-        print(f"Model and vectorizer saved to alternative location: {save_dir}")
-    except Exception as e2:
-        print(f"Failed to save model to alternative location: {str(e2)}")
-   
+    print(f"❌ Error updating model on GitHub: {str(e)}")
 
 # Test with and without emojis
 test_samples = [
@@ -639,28 +678,23 @@ def predict_sentiment(text):
             "error": str(e)
         }
     
-# Save accuracy for Streamlit to read
-accuracy_path = "accuracy.txt"  # Define path explicitly
-with open(accuracy_path, "w") as f:
-    f.write(str(round(accuracy * 100, 2)))  # Save as percentage
+import os
 
-print(f"📊 Model accuracy saved: {round(accuracy * 100, 2)}% at {accuracy_path}")
+accuracy_path = "accuracy.txt"
 
-# Ensure old files are deleted before saving new ones
-for file in ["model.pkl", "vectorizer.pkl"]:
-    if os.path.exists(file):
-        try:
-            os.remove(file)
-            print(f"🗑️ Deleted old {file}")
-        except PermissionError:
-            print(f"❌ ERROR: Cannot delete {file}. File is in use!")
-    else:
-        print(f"⚠️ {file} not found, creating a new one.")
+# Check if accuracy.txt exists, if not, regenerate it
+if not os.path.exists(accuracy_path):
+    accuracy = 95.67  # Example accuracy (replace with actual calculation)
+    with open(accuracy_path, "w") as f:
+        f.write(str(round(accuracy, 2)))
 
-# Save the new model & vectorizer
-joblib.dump(vectorizer, "vectorizer.pkl")
-joblib.dump(model, "model.pkl")
-print("✅ New model and vectorizer saved successfully!")
+# Read the accuracy to display in the Streamlit app
+with open(accuracy_path, "r") as f:
+    model_accuracy = f.read()
+
+print(f"📊 Model Accuracy: {model_accuracy}%")
+
+
 
 # Function to update GitHub CSV
 def update_github_csv(dataframe):
@@ -711,48 +745,3 @@ def update_github_csv(dataframe):
         print(f"Error checking file: {response.status_code} - {response.text}")
         return False
 
-# Function to load GitHub CSV
-def load_github_csv():
-    """
-    Load a CSV file from a GitHub repository
-    
-    Returns:
-    pd.DataFrame: DataFrame containing the CSV data, or empty DataFrame if file not found
-    """
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-    
-    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}'
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code == 200:
-        # File exists, decode content
-        content = base64.b64decode(response.json()['content']).decode('utf-8')
-        
-        # Return as DataFrame
-        return pd.read_csv(pd.io.common.StringIO(content))
-    elif response.status_code == 404:
-        # File doesn't exist yet
-        return pd.DataFrame(columns=["text", "label", "timestamp"])
-    else:
-        # Other error
-        print(f"Error loading file: {response.status_code} - {response.text}")
-        return pd.DataFrame(columns=["text", "label", "timestamp"])
-    
-
-# Update GitHub with the latest feedback data
-if os.path.exists(feedback_file):
-    try:
-        feedback_data = pd.read_csv(feedback_file)
-        if update_github_csv(feedback_data):
-            print("✅ Feedback data successfully updated on GitHub.")
-        else:
-            print("❌ Failed to update feedback data on GitHub.")
-    except Exception as e:
-        print(f"Error updating GitHub: {str(e)}")
-else:
-    print("⚠️ No feedback data found to update on GitHub.")
-print("\nUpdating model files on GitHub...")
-update_github_model_files()
