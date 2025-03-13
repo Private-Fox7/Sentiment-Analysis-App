@@ -161,27 +161,6 @@ def load_github_csv():
         print(f"Error loading file: {response.status_code} - {response.text}")
         return pd.DataFrame(columns=["text", "label", "timestamp"])
     
-def load_models_from_github():
-    """Fetch latest models from GitHub repo"""
-    headers = {'Authorization': f'token {GITHUB_TOKEN}'}
-    
-    def download_file(file):
-        url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{file}'
-        response = requests.get(url, headers=headers)
-        content = base64.b64decode(response.json()['content'])
-        with open(file, 'wb') as f: 
-            f.write(content)
-    
-    try:
-        download_file('model.pkl')
-        download_file('vectorizer.pkl')
-        return joblib.load('model.pkl'), joblib.load('vectorizer.pkl')
-    except Exception as e:
-        st.error(f"Failed to load from GitHub: {str(e)}")
-        # Fallback to local files
-        return joblib.load("model.pkl"), joblib.load("vectorizer.pkl")
-
-
 # Create session state variables for async training
 if "training_in_progress" not in st.session_state:
     st.session_state.training_in_progress = False
@@ -202,15 +181,27 @@ def get_model_accuracy():
             return f.read().strip() + "%"
     except FileNotFoundError:
         return "N/A"
-
-# Function to load models without any widget functionality
 @st.cache_resource
 def load_models():
-    """Load model and vectorizer from disk with cache clearing to ensure fresh models"""
-    _model = joblib.load("model.pkl")
-    _vectorizer = joblib.load("vectorizer.pkl")
+    """Loads model and vectorizer from GitHub directly into memory"""
+    print("🔄 Attempting to load model and vectorizer...")
+
+    _model = load_model_from_github(MODEL_URL)
+    _vectorizer = load_model_from_github(VECTORIZER_URL)
+
+    if _model:
+        print("✅ Model loaded successfully!")
+    else:
+        print("❌ Model could not be loaded.")
+
+    if _vectorizer:
+        print("✅ Vectorizer loaded successfully!")
+    else:
+        print("❌ Vectorizer could not be loaded.")
+    
     return _model, _vectorizer
 
+model, vectorizer = load_models()
 # Function to run training asynchronously
 def retrain_model_async():
     try:
@@ -371,14 +362,37 @@ user_review = st.text_area("💬 Enter your movie review here:", "", height=150)
 # Debug mode toggle
 debug_mode = st.sidebar.checkbox("Show preprocessing details")
 
-def load_models():
-    """Force reload model and vectorizer from disk"""
-    _model = joblib.load("model.pkl")
-    _vectorizer = joblib.load("vectorizer.pkl")
-    return _model, _vectorizer
+import requests
+import joblib
+import io
+
+MODEL_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/model.pkl"
+VECTORIZER_URL = "https://raw.githubusercontent.com/Private-Fox7/Sentiment-Analysis-App/main/vectorizer.pkl"
+
+def load_model_from_github(url):
+    """Loads a model from GitHub into memory without saving locally"""
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, stream=True, headers=headers)
+    print(f"🔗 Fetching model from: {url}")
+    print(f"📜 Status Code: {response.status_code}")
+    
+    if response.status_code == 200:
+        model_file = io.BytesIO(response.content)  # Store in memory (not local disk)
+        return joblib.load(model_file)
+    else:
+        print(f"❌ Failed to download model. Status: {response.status_code}")
+        return None
+
+
+if not model or not vectorizer:
+    st.error("❌ Model or vectorizer is missing. Please check the logs.")
+else:
+    st.success("✅ Model and vectorizer are loaded successfully!")
 
 if st.sidebar.button("🔄 Reload Model"):
     st.cache_resource.clear()
+    st.success("✅ Model cache cleared. The latest model will be loaded from GitHub!")
+    model, vectorizer = load_models()  # Ensure new model is fetched from GitHub
 
     # Temporary placeholders for notifications
     delete_message = st.sidebar.empty()
@@ -389,17 +403,6 @@ if st.sidebar.button("🔄 Reload Model"):
     st.sidebar.info("""😀😀Please be patient do not close the page, as the model is being trained on more than 25,000 sample files and being added on GitHub Repository.
     Your Patience is appreciated✌✌
     Estimated time 3 minutes """)
-
-    try:
-        os.remove("model.pkl")
-        os.remove("vectorizer.pkl")
-        delete_message.success("🗑️ Deleted old model files.")
-        time.sleep(1)  # Small delay for better user experience
-    except FileNotFoundError:
-        delete_message.info("⚠️ No cached model files found.")
-
-    # Clear delete message before starting training
-    delete_message.empty()
 
     # Start retraining process
     st.sidebar.info("🔄 Starting model retraining with quick training...")
@@ -495,94 +498,62 @@ if "show_feedback" in st.session_state and st.session_state.show_feedback:
     if feedback == "No":
         correct_label = st.selectbox("What should the correct sentiment be?", ("positive", "negative"))
 
-        if st.button("Submit Feedback"):
-            # Get current timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Create new data entry with timestamp
-            new_data = pd.DataFrame({
-                "text": [user_review], 
-                "label": [correct_label],
-                "timestamp": [timestamp]
-            })
-            
-            # Initialize variables to track storage success
-            github_success = False
-            local_success = False
-            
-            # ALWAYS update local storage first
-            try:
-                if os.path.exists(feedback_file):
-                    local_data = pd.read_csv(feedback_file)
-                    
-                    # Add timestamp column if it doesn't exist
-                    if "timestamp" not in local_data.columns:
-                        local_data["timestamp"] = [timestamp] * len(local_data)
-                        
-                    updated_local = pd.concat([local_data, new_data], ignore_index=True)
-                else:
-                    updated_local = new_data
-                
-                # Save to local storage
-                updated_local.to_csv(feedback_file, index=False)
-                local_success = True
-                local_feedback_count = len(updated_local)
-            except Exception as e:
-                st.error(f"Error saving feedback locally: {str(e)}")
-            
-            # Then try to update GitHub
-            try:
-                # Load existing data from GitHub
-                existing_data = load_github_csv()
-                
-                # Add timestamp column if it doesn't exist
-                if "timestamp" not in existing_data.columns:
-                    existing_data["timestamp"] = [timestamp] * len(existing_data)
-                
-                # Append new data
-                updated_data = pd.concat([existing_data, new_data], ignore_index=True)
-                
-                # Update file on GitHub
-                github_success = update_github_csv(updated_data)
-                
-                if github_success:
-                    github_feedback_count = len(updated_data)
-                else:
-                    st.error("Error saving feedback to GitHub. Check your token and repository settings.")
-            except Exception as e:
-                st.error(f"Error saving feedback to GitHub: {str(e)}")
-            
-            # Display appropriate success messages
-            if github_success and local_success:
-                st.success(f"Thank you! Your feedback has been recorded to both GitHub and local storage.")
-                st.info(f"GitHub entries: {github_feedback_count} | Local entries: {local_feedback_count}")
-            elif local_success:
-                st.success(f"Thank you! Your feedback has been recorded locally. (Total feedback: {local_feedback_count})")
-                st.warning("Failed to update GitHub. Only local storage was updated.")
+    if st.button("Submit Feedback"):
+        # Get current timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Create new data entry with timestamp
+        new_data = pd.DataFrame({
+            "text": [user_review], 
+            "label": [correct_label],
+            "timestamp": [timestamp]
+        })
+
+        # Initialize variables to track storage success
+        github_success = False
+
+        try:
+            # Load existing data from GitHub
+            existing_data = load_github_csv()
+
+            # Add timestamp column if it doesn't exist
+            if "timestamp" not in existing_data.columns:
+                existing_data["timestamp"] = [timestamp] * len(existing_data)
+
+            # Append new data
+            updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+
+            # Update file on GitHub
+            github_success = update_github_csv(updated_data)
+
+            if github_success:
+                st.success("Thank you! Your feedback has been recorded to GitHub.")
             else:
-                st.error("Failed to save feedback to any storage location.")
-            
+                st.error("Error saving feedback to GitHub. Check your token and repository settings.")
+
             # Determine feedback count for retraining decision
-            feedback_count = local_feedback_count if local_success else 0
-            
+            feedback_count = len(updated_data)
+
             # Check if retraining is needed (every 1 feedback entries)
             if feedback_count % 1 == 0 and feedback_count > 0:
                 st.info("Retraining will begin in the background...")
-                
+
                 # Start background training in a separate thread
                 training_thread = threading.Thread(target=retrain_model_async)
                 training_thread.daemon = True
                 training_thread.start()
             else:
                 st.info(f"Model will be retrained after {1 - (feedback_count % 1)} more feedback entries.")
-            
+
             # Reset UI to avoid feedback loop
             st.session_state.show_feedback = False
-                
+
+        except Exception as e:
+            st.error(f"Error saving feedback to GitHub: {str(e)}")
+
 # Show feedback data if debug mode is on
 if debug_mode:
     with st.sidebar.expander("View Feedback Data"):
-        # Display GitHub data if configured
         try:
             st.subheader("GitHub Feedback Data")
             github_data = load_github_csv()
@@ -590,13 +561,5 @@ if debug_mode:
             st.text(f"Total GitHub entries: {len(github_data)}")
         except Exception as e:
             st.error(f"Error loading GitHub feedback data: {str(e)}")
-        
-        # Show local feedback data
-        if os.path.exists(feedback_file):
-            try:
-                st.subheader("Local Feedback Data")
-                local_data = pd.read_csv(feedback_file)
-                st.dataframe(local_data)
-                st.text(f"Total local entries: {len(local_data)}")
-            except Exception as e:
-                st.error(f"Error loading local feedback data: {str(e)}")
+
+     
