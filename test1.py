@@ -23,7 +23,7 @@ from datetime import datetime  # For timestamp in commit messages
 import requests
 import base64
 from dotenv import load_dotenv  # type: ignore
-
+from supabase import create_client
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +34,10 @@ GITHUB_REPO = "Private-Fox7/Sentiment-Analysis-App"  # Replace with your GitHub 
 GITHUB_PATH = "feedback_dataset.csv"  # Path to the CSV file in the repo
 GITHUB_ACCURACY_FILE = "accuracy.txt"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_ACCURACY_FILE}"
+
+# Supabase settings
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
 # Force UTF-8 encoding for Windows terminals (fixes emoji printing errors)
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
@@ -128,139 +132,6 @@ def simple_lemmatize(word):
 
 # Check if quick_train flag is present
 quick_train = "--quick_train" in sys.argv
-
-# Fix: Make the paths relative or environment-based for deployment
-# Use environment variables or default paths that should work in most environments
-# Base directory (Including 'test' folder)
-# Google Drive file ID (replace with your actual file ID)
-GDRIVE_FILE_ID = "1DyItDqY5luh4aHONmYoR0zWSI8BRAnPG"  # ✅ Replace with your actual file ID
-dataset_zip_path = "imdb_dataset.zip"
-extract_path = "imdb_dataset"
-
-# Only download if the file doesn't exist
-if not os.path.exists(dataset_zip_path):
-    gdown.download(f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}", dataset_zip_path, quiet=False)
-
-# Extract the dataset
-import zipfile
-if not os.path.exists(extract_path):
-    with zipfile.ZipFile(dataset_zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_path)
-
-# Use the extracted dataset path
-train_pos_path = os.path.join(extract_path, "aclImdb/test/pos")
-train_neg_path = os.path.join(extract_path, "aclImdb/test/neg")
-
-print("Positive Reviews Path:", train_pos_path)
-print("Negative Reviews Path:", train_neg_path)
-
-# Function to load data with sample limit for quick training
-def load_data(path, label, limit=None):
-    texts = []
-    
-    # Check if the directory exists
-    if not os.path.exists(path):
-        print(f"Warning: Path {path} does not exist. Creating sample data instead.")
-        # Create sample data for testing when the real data isn't available
-        if label == 'positive':
-            sample_texts = [
-                "This movie was excellent and I enjoyed every minute of it.",
-                "The acting was superb and the plot was fascinating.",
-                "I highly recommend this film, it's one of the best I've seen.",
-                "What a masterpiece, definitely worth watching multiple times.",
-                "The movie was so Fabulous.",
-                "not so bad"
-            ]
-        else:
-            sample_texts = [
-                "This movie was terrible and I wasted my time watching it.",
-                "The acting was awful and the plot made no sense.",
-                "I regret seeing this film, it's one of the worst I've seen.",
-                "What a disaster, definitely not worth watching.",
-                "hated the movie"
-            ]
-        return pd.DataFrame({'text': sample_texts, 'label': [label] * len(sample_texts)})
-    
-    try:
-        filenames = os.listdir(path)
-        
-        # Limit the number of files to process if quick_train is enabled
-        if limit and quick_train:
-            filenames = filenames[:limit]
-        
-        for filename in filenames:
-            if filename.endswith('.txt'):
-                with open(os.path.join(path, filename), 'r', encoding='utf-8') as file:
-                    texts.append(file.read())
-    except Exception as e:
-        print(f"Error loading data from {path}: {str(e)}")
-        # Create backup sample data if loading fails
-        if label == 'positive':
-            texts = ["Good movie", "Excellent film", "Great performances","better","not so bad"]
-        else:
-            texts = ["Bad movie", "Terrible film", "Poor performances","hated","could have been more interesting"]
-    
-    return pd.DataFrame({'text': texts, 'label': [label] * len(texts)})
-
-print("Loading dataset...")
-
-# In quick mode, use much smaller dataset
-sample_limit = 300 if quick_train else None
-
-# Load positive and negative reviews
-pos_reviews = load_data(train_pos_path, 'positive', sample_limit)
-neg_reviews = load_data(train_neg_path, 'negative', sample_limit)
-
-# Combine and shuffle the dataset
-df = pd.concat([pos_reviews, neg_reviews], ignore_index=True)
-df = df.sample(frac=1, random_state=42).reset_index(drop=True)
-
-print(f"Loaded {len(df)} reviews.")
-
-# Initialize Lemmatizer with error handling
-try:
-    lemmatizer = WordNetLemmatizer()
-    # Test if lemmatizer works
-    lemmatizer.lemmatize("testing")
-    print("Lemmatizer initialized successfully.")
-except Exception as e:
-    print(f"Error initializing lemmatizer: {str(e)}. Using fallback lemmatization.")
-    lemmatizer = None  # Will use fallback function
-
-# Custom emoji sentiment dictionary
-emoji_sentiments = {
-    # Positive emojis
-    "slightly_smiling_face": "positive_sentiment",
-    "grinning": "positive_sentiment",
-    "heart_eyes": "positive_sentiment",
-    "thumbs_up": "positive_sentiment",
-    "thumbsup": "positive_sentiment",  # Common variation
-    "laughing": "positive_sentiment",
-    "grinning_face": "positive_sentiment",
-    "smile": "positive_sentiment",
-    "smiley": "positive_sentiment",
-    "wink": "positive_sentiment",
-    "blush": "positive_sentiment",
-    "heart": "positive_sentiment",
-    "star": "positive_sentiment",
-    "sun": "positive_sentiment",
-    "clap": "positive_sentiment",
-    
-    # Negative emojis
-    "angry": "negative_sentiment",
-    "cry": "negative_sentiment",
-    "sob": "negative_sentiment",
-    "thumbs_down": "negative_sentiment",
-    "thumbsdown": "negative_sentiment",  # Common variation
-    "scream": "negative_sentiment",
-    "rage": "negative_sentiment",
-    "disappointed": "negative_sentiment",
-    "worried": "negative_sentiment",
-    "confused": "negative_sentiment",
-    "tired_face": "negative_sentiment",
-    "fearful": "negative_sentiment",
-    "weary": "negative_sentiment"
-}
 
 # Improved preprocessing with negation handling and error handling for NLTK components
 def preprocess_text(text):
@@ -389,8 +260,42 @@ def add_text_examples():
 
 # Add custom examples to emphasize clear text-based sentiment
 custom_examples = add_text_examples()
-df = pd.concat([df, custom_examples], ignore_index=True)
-print(f"Total dataset size after augmentation: {len(df)}")
+
+# Custom emoji sentiment dictionary
+emoji_sentiments = {
+    # Positive emojis
+    "slightly_smiling_face": "positive_sentiment",
+    "grinning": "positive_sentiment",
+    "heart_eyes": "positive_sentiment",
+    "thumbs_up": "positive_sentiment",
+    "thumbsup": "positive_sentiment",  # Common variation
+    "laughing": "positive_sentiment",
+    "grinning_face": "positive_sentiment",
+    "smile": "positive_sentiment",
+    "smiley": "positive_sentiment",
+    "wink": "positive_sentiment",
+    "blush": "positive_sentiment",
+    "heart": "positive_sentiment",
+    "star": "positive_sentiment",
+    "sun": "positive_sentiment",
+    "clap": "positive_sentiment",
+    
+    # Negative emojis
+    "angry": "negative_sentiment",
+    "cry": "negative_sentiment",
+    "sob": "negative_sentiment",
+    "thumbs_down": "negative_sentiment",
+    "thumbsdown": "negative_sentiment",  # Common variation
+    "scream": "negative_sentiment",
+    "rage": "negative_sentiment",
+    "disappointed": "negative_sentiment",
+    "worried": "negative_sentiment",
+    "confused": "negative_sentiment",
+    "tired_face": "negative_sentiment",
+    "fearful": "negative_sentiment",
+    "weary": "negative_sentiment"
+    
+}
 
 # Function to load GitHub CSV
 def load_github_csv():
@@ -421,6 +326,92 @@ def load_github_csv():
         # Other error
         print(f"Error loading file: {response.status_code} - {response.text}")
         return pd.DataFrame(columns=["text", "label", "timestamp"])
+
+# Remove old file-based data loading code and replace with this:
+def load_training_data(quick_train=False):
+    """Load training data from Supabase (IMDB) and GitHub feedback"""
+    print("Loading dataset...")
+    
+    try:
+        # Initialize Supabase client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        print("Loading IMDB dataset from Supabase...")
+        if quick_train:
+            # Load limited data for quick training
+            response = supabase.table('imdb_reviews').select('*').limit(1000).execute()
+            print("Quick training mode: Loading 1000 reviews")
+        else:
+            # Load ALL reviews for full training - paginate through all results
+            all_reviews = []
+            page_size = 1000
+            start = 0
+            
+            while True:
+                response = supabase.table('imdb_reviews')\
+                    .select('*')\
+                    .range(start, start + page_size - 1)\
+                    .execute()
+                
+                if not response.data:
+                    break
+                    
+                all_reviews.extend(response.data)
+                start += page_size
+                
+                print(f"Loaded {len(all_reviews)} reviews so far...")
+                
+                if len(response.data) < page_size:
+                    break
+            
+            print(f"Full training mode: Loading complete")
+            response.data = all_reviews
+        
+        if not response.data:
+            raise Exception("No data received from Supabase")
+            
+        df = pd.DataFrame(response.data)
+        print(f"Successfully loaded {len(df)} IMDB reviews")
+        
+        # Add feedback data with weighting
+        try:
+            feedback_df = load_github_csv()
+            if len(feedback_df) > 0:
+                feedback_df = pd.concat([feedback_df] * 25, ignore_index=True)
+                df = pd.concat([df, feedback_df], ignore_index=True)
+                print(f"Added {len(feedback_df)} weighted feedback samples")
+        except Exception as e:
+            print(f"Note: Could not load feedback data: {str(e)}")
+        
+        return df
+            
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        print("Using emergency sample data...")
+        return pd.DataFrame({
+            'text': ["This is good", "This is bad"],
+            'label': ["positive", "negative"]
+        })
+
+# Use the new loading function
+print("Loading dataset...")
+df = load_training_data(quick_train=quick_train)
+
+# Combine and shuffle the dataset
+df = pd.concat([df, custom_examples], ignore_index=True)
+df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+print(f"Loaded {len(df)} reviews.")
+
+# Initialize Lemmatizer with error handling
+try:
+    lemmatizer = WordNetLemmatizer()
+    # Test if lemmatizer works
+    lemmatizer.lemmatize("testing")
+    print("Lemmatizer initialized successfully.")
+except Exception as e:
+    print(f"Error initializing lemmatizer: {str(e)}. Using fallback lemmatization.")
+    lemmatizer = None  # Will use fallback function
 
 # Load feedback data if available - MOVED BEFORE PREPROCESSING
 # Load feedback data from GitHub
@@ -481,9 +472,30 @@ except Exception as e:
     X = Normalizer().fit_transform(X)
     df = df_emergency
 
-# Split Data
+# Add this code before the train_test_split
+print("Checking and cleaning labels...")
+
+# Remove rows with NaN values
+df = df.dropna(subset=['label', 'cleaned_text'])
+
+# Ensure all labels are strings
+df['label'] = df['label'].astype(str)
+
+# Verify unique labels
+print(f"Final dataset size: {len(df)} samples")
+print(f"Unique labels: {df['label'].unique()}")
+
+# Rerun vectorization on clean data
+print("Vectorizing clean data...")
+X = vectorizer.fit_transform(df["cleaned_text"])
+X = Normalizer().fit_transform(X)
+
+# Now perform the split
 X_train, X_test, y_train, y_test = train_test_split(
-    X, df['label'], test_size=0.2, random_state=42, stratify=df['label']
+    X, df['label'], 
+    test_size=0.2, 
+    random_state=42, 
+    stratify=df['label']
 )
 
 # Train Model - use faster parameters in quick mode
@@ -617,7 +629,8 @@ test_samples = [
     "Not so bad",
     "Hated😡",
     "Could have been more interesting",
-    "Can be watched once"  # Multiple positive emojis
+    "Can be watched once",
+    "Awefull movie😫😫"  # Multiple positive emojis
 ]
 
 # Skip detailed testing in quick mode
@@ -717,8 +730,6 @@ def save_accuracy_to_github(accuracy):
 # Call this function after training completes
 save_accuracy_to_github(accuracy)
 
-
-
 # Function to update GitHub CSV
 def update_github_csv(dataframe):
     """
@@ -761,10 +772,9 @@ def update_github_csv(dataframe):
             'content': encoded_content
         }
         # Create new file
-        create_response = requests.put(url, headers=headers, json=data)
+        create_response = requests.put(url, headers=headers, json=data)  # Fixed this line
         return create_response.status_code in (200, 201)
     else:
         # Other error
         print(f"Error checking file: {response.status_code} - {response.text}")
         return False
-
