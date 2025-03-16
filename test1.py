@@ -40,7 +40,15 @@ SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
 # Force UTF-8 encoding for Windows terminals (fixes emoji printing errors)
-sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
+#sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
+try:
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer, errors="ignore")
+    else:
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout)
+except AttributeError:
+    sys.stdout = codecs.getwriter("utf-8")(sys.stdout)  # Fallback to normal stdout
+
 
 # Change Windows console to UTF-8 (Only works in CMD, not PowerShell)
 if sys.platform == "win32":
@@ -131,7 +139,7 @@ def simple_lemmatize(word):
     return word
 
 # Check if quick_train flag is present
-quick_train = "--quick_train" in sys.argv
+quick_train = "--quick_train" in sys.argv or os.getenv('QUICK_TRAIN', 'false').lower() == 'true'
 
 # Improved preprocessing with negation handling and error handling for NLTK components
 def preprocess_text(text):
@@ -330,39 +338,51 @@ def load_github_csv():
 # Remove old file-based data loading code and replace with this:
 def load_training_data(quick_train=False):
     """Load training data from Supabase (IMDB) and GitHub feedback"""
-    print("Loading dataset...")
+    print(f"Loading dataset... (Quick train: {quick_train})")
     
     try:
-        # Initialize Supabase client
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         
-        print("Loading IMDB dataset from Supabase...")
+        # Force full training unless explicitly set to quick
         if quick_train:
-            # Load limited data for quick training
-            response = supabase.table('imdb_reviews').select('*').limit(1000).execute()
-            print("Quick training mode: Loading 1000 reviews")
+            print("Quick training mode requested - loading 1000 reviews")
+            try:
+                response = supabase.table('imdb_reviews').select('*').limit(1000).execute()
+            except Exception as e:
+                print(f"⚠️ Error loading quick training data: {e}")
+                return pd.DataFrame()
         else:
-            # Load ALL reviews for full training - paginate through all results
+            print("Full training mode - loading all reviews")
             all_reviews = []
             page_size = 1000
             start = 0
             
             while True:
-                response = supabase.table('imdb_reviews')\
-                    .select('*')\
-                    .range(start, start + page_size - 1)\
-                    .execute()
-                
-                if not response.data:
-                    break
+                print(f"Loading batch starting at {start}...")
+                try:
+                    response = supabase.table('imdb_reviews')\
+                        .select('*')\
+                        .range(start, start + page_size - 1)\
+                        .execute()
                     
-                all_reviews.extend(response.data)
-                start += page_size
-                
-                print(f"Loaded {len(all_reviews)} reviews so far...")
-                
-                if len(response.data) < page_size:
-                    break
+                    if not response.data:
+                        break
+                        
+                    all_reviews.extend(response.data)
+                    start += page_size
+                    
+                    print(f"Loaded {len(all_reviews)} reviews so far...")
+                    
+                    if len(response.data) < page_size:
+                        break
+                        
+                except Exception as e:
+                    print(f"⚠️ Error fetching batch at {start}: {e}")
+                    if len(all_reviews) > 0:
+                        print(f"Continuing with {len(all_reviews)} reviews loaded so far...")
+                        break
+                    else:
+                        raise Exception("Failed to load any reviews")
             
             print(f"Full training mode: Loading complete")
             response.data = all_reviews
