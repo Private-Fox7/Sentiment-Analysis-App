@@ -23,7 +23,7 @@ MarkupSafe==3.0.2
 mdurl==0.1.2
 narwhals==1.30.0
 nltk==3.8.1
-numpy
+numpy>=1.26.0
 packaging==24.2
 pandas==2.2.3
 Pillow==9.4.0
@@ -46,6 +46,7 @@ six==1.17.0
 smmap==5.0.2
 soupsieve==2.6
 streamlit==1.43.1
+supabase==2.0.3
 tenacity==9.0.0
 threadpoolctl==3.5.0
 toml==0.10.2
@@ -55,4 +56,4 @@ typing_extensions==4.12.2
 tzdata==2025.1
 urllib3==2.3.0
 watchdog==6.0.0
-win32_setctime==1.2.0
+win32-setctime==1.2.0
